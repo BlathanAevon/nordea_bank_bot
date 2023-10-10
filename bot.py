@@ -27,16 +27,18 @@ class BankBot:
         self.client = None
         self.init_token = None
 
-
     @staticmethod
     def log_info(func):
         @wraps(func)
-        async def wrapper(self, update: Update, context: CallbackContext, *args, **kwargs):
+        async def wrapper(
+            self, update: Update, context: CallbackContext, *args, **kwargs
+        ):
             logger.info(
                 f"User {update.message.from_user.id} wrote {func.__name__} at {datetime.now().strftime('%d.%m.%Y %H:%M')}"
             )
             result = await func(self, update, context, *args, **kwargs)
             return result
+
         return wrapper
 
     @log_info
@@ -159,7 +161,11 @@ class BankBot:
             },
         )
 
-        if response.status_code != 200:
+        if response.status_code == 401:
+            logger.warning("Tokens are expired, getting new tokens...")
+            self.init_token = self.client.exchange_token(self.init_token["refresh"])
+            await self.get_balance(update, context)
+        elif response.status_code > 300 and response.status_code != 401:
             logger.error(
                 f"User {update.message.from_user.id} tried to get balance but request was unsuccessful.\nRequest failed with code {response.status_code} and message {response.text}"
             )
@@ -176,7 +182,6 @@ class BankBot:
         await update.message.reply_text(
             f"💸 Account Balance is {balance} SEK",
         )
-
 
     @log_info
     async def get_transactions(self, update: Update, context: CallbackContext) -> None:
@@ -195,7 +200,11 @@ class BankBot:
             },
         )
 
-        if response.status_code != 200:
+        if response.status_code == 401:
+            logger.warning("Tokens are expired, getting new tokens...")
+            self.init_token = self.client.exchange_token(self.init_token["refresh"])
+            await self.get_transactions(update, context)
+        elif response.status_code > 300 and response.status_code != 401:
             logger.error(
                 f"User {update.message.from_user.id} tried to get transactions but request was unsuccessful.\nRequest failed with code {response.status_code} and message {response.text}"
             )
@@ -255,12 +264,10 @@ class BankBot:
         for final_message in messages_list:
             await update.message.reply_text(final_message, parse_mode="MarkdownV2")
 
-
     @log_info
     async def settings(self, update: Update, context: CallbackContext) -> None:
         pass
-    
-    
+
     def run_bot(self) -> None:
         db.db_init()
         logger.success(
