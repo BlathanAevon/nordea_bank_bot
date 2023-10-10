@@ -41,6 +41,16 @@ class BankBot:
 
         return wrapper
 
+    async def require_exchange(self, response, update, context, function):
+        if response.status_code == 401:
+            logger.warning("Tokens are expired, getting new tokens...")
+            self.init_token = self.client.exchange_token(self.init_token["refresh"])
+            await function(update, context)
+        elif response.status_code in [400, 403, 404, 405, 408, 429, 500, 502, 503, 504]:
+            logger.error(
+                f"User {update.message.from_user.id} tried to make a request in {function.__name__} but request was unsuccessful.\nRequest failed with code {response.status_code} and message {response.text}"
+            )
+
     @log_info
     async def on_start(self, update: Update, callback: CallbackContext) -> None:
         user_id = update.message.from_user.id
@@ -161,14 +171,7 @@ class BankBot:
             },
         )
 
-        if response.status_code == 401:
-            logger.warning("Tokens are expired, getting new tokens...")
-            self.init_token = self.client.exchange_token(self.init_token["refresh"])
-            await self.get_balance(update, context)
-        elif response.status_code > 300 and response.status_code != 401:
-            logger.error(
-                f"User {update.message.from_user.id} tried to get balance but request was unsuccessful.\nRequest failed with code {response.status_code} and message {response.text}"
-            )
+        await self.require_exchange(response, update, context, self.get_balance)
 
         balance = next(
             (
@@ -200,14 +203,7 @@ class BankBot:
             },
         )
 
-        if response.status_code == 401:
-            logger.warning("Tokens are expired, getting new tokens...")
-            self.init_token = self.client.exchange_token(self.init_token["refresh"])
-            await self.get_transactions(update, context)
-        elif response.status_code > 300 and response.status_code != 401:
-            logger.error(
-                f"User {update.message.from_user.id} tried to get transactions but request was unsuccessful.\nRequest failed with code {response.status_code} and message {response.text}"
-            )
+        await self.require_exchange(response, update, context, self.get_transactions)
 
         messages_list = []
         for transaction_type in ["pending", "booked"]:
