@@ -41,15 +41,17 @@ class BankBot:
 
         return wrapper
 
-    async def require_exchange(self, response, update, context, function):
+    async def require_exchange(self, response, update) -> bool:
         if response.status_code == 401:
-            logger.warning("Tokens are expired, getting new tokens...")
-            self.init_token = self.client.exchange_token(self.init_token["refresh"])
-            await function(update, context)
+            return True
         elif response.status_code in [400, 403, 404, 405, 408, 429, 500, 502, 503, 504]:
             logger.error(
                 f"User {update.message.from_user.id} tried to make a request in {function.__name__} but request was unsuccessful.\nRequest failed with code {response.status_code} and message {response.text}"
             )
+
+    async def refresh_token(self) -> None:
+        logger.warning("Tokens are expired, getting new tokens...")
+        self.init_token = self.client.exchange_token(self.init_token["refresh"])
 
     @log_info
     async def on_start(self, update: Update, callback: CallbackContext) -> None:
@@ -57,13 +59,18 @@ class BankBot:
 
         if db.user_exists(user_id):
             if db.is_authorized(user_id):
-                await self.authenticated(update, callback)
-                return
+                try:
+                    await self.authenticated(update, callback)
+                    return
+                except requests.HTTPError:
+                    await self.refresh_token()
+                    await self.authenticated(update, callback)
+                    return
 
             login_keyboard = [
                 [
                     KeyboardButton(
-                        "Login",
+                        "💠 Login",
                     )
                 ]
             ]
@@ -80,7 +87,11 @@ class BankBot:
             await update.message.reply_text(
                 f"👨 Hello {update.message.from_user.first_name}! Welcome to Nordea Bank Checker, please authenticate in your bank."
             )
-            await self.bank_init(update, callback)
+            try:
+                await self.bank_init(update, callback)
+            except requests.HTTPError:
+                await self.refresh_token()
+                await self.bank_init(update, callback)
             return
 
     @log_info
@@ -104,7 +115,7 @@ class BankBot:
         keyboard = [
             [
                 KeyboardButton(
-                    "Authenticate Bank",
+                    "👨‍💻 Authenticate Bank",
                     web_app=WebAppInfo(db.get_auth_link(user_id)),
                 )
             ]
@@ -142,15 +153,15 @@ class BankBot:
         main_keyboard = [
             [
                 KeyboardButton(
-                    "Get Transactions",
+                    "📇 Get Transactions",
                 ),
                 KeyboardButton(
-                    "Get Balance",
+                    "💳 Get Balance",
                 ),
             ]
         ]
 
-        main_keyboard.extend([[KeyboardButton("Settings")]])
+        main_keyboard.extend([[KeyboardButton("⚙️ Settings")]])
 
         await update.message.reply_text(
             "🏫 Choose an option:",
@@ -171,7 +182,8 @@ class BankBot:
             },
         )
 
-        await self.require_exchange(response, update, context, self.get_balance)
+        if self.require_exchange(response, update):
+            self.refresh_token()
 
         balance = next(
             (
@@ -203,7 +215,8 @@ class BankBot:
             },
         )
 
-        await self.require_exchange(response, update, context, self.get_transactions)
+        if self.require_exchange(response, update):
+            self.refresh_token()
 
         messages_list = []
         for transaction_type in ["pending", "booked"]:
