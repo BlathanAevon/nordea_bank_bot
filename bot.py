@@ -46,12 +46,14 @@ class BankBot:
             return True
         elif response.status_code in [400, 403, 404, 405, 408, 429, 500, 502, 503, 504]:
             logger.error(
-                f"User {update.message.from_user.id} tried to make a request in {function.__name__} but request was unsuccessful.\nRequest failed with code {response.status_code} and message {response.text}"
+                f"User {update.message.from_user.id} tried to make a request but request was unsuccessful.\nRequest failed with code {response.status_code} and message {response.text}"
             )
+        else:
+            return False
 
     async def refresh_token(self) -> None:
         logger.warning("Tokens are expired, getting new tokens...")
-        self.init_token = self.client.exchange_token(self.init_token["refresh"])
+        self.client.exchange_token(self.init_token["refresh"])
 
     @log_info
     async def on_start(self, update: Update, callback: CallbackContext) -> None:
@@ -182,8 +184,8 @@ class BankBot:
             },
         )
 
-        if self.require_exchange(response, update):
-            self.refresh_token()
+        if await self.require_exchange(response, update):
+            await self.refresh_token()
 
         balance = next(
             (
@@ -215,8 +217,8 @@ class BankBot:
             },
         )
 
-        if self.require_exchange(response, update):
-            self.refresh_token()
+        if await self.require_exchange(response, update):
+            await self.refresh_token()
 
         messages_list = []
         for transaction_type in ["pending", "booked"]:
@@ -302,17 +304,17 @@ class BankBot:
         self.application.add_handler(CommandHandler("start", self.on_start))
 
         self.application.add_handler(
-            MessageHandler(filters.Text("Login"), self.bank_init)
+            MessageHandler(filters.Text("💠 Login"), self.bank_init)
         )
 
         self.application.add_handler(
-            MessageHandler(filters.Text("Get Balance"), self.get_balance)
+            MessageHandler(filters.Text("💳 Get Balance"), self.get_balance)
         )
         self.application.add_handler(
-            MessageHandler(filters.Text("Get Transactions"), self.get_transactions)
+            MessageHandler(filters.Text("📇 Get Transactions"), self.get_transactions)
         )
         self.application.add_handler(
-            MessageHandler(filters.Text("Settings"), self.settings)
+            MessageHandler(filters.Text("⚙️ Settings"), self.settings)
         )
 
         self.application.add_handler(
