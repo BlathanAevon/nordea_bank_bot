@@ -53,7 +53,8 @@ class BankBot:
 
     async def refresh_token(self) -> None:
         logger.warning("Tokens are expired, getting new tokens...")
-        self.client.exchange_token(self.init_token["refresh"])
+        self.init_token = self.client.generate_token()
+        
 
     @log_info
     async def on_start(self, update: Update, callback: CallbackContext) -> None:
