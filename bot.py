@@ -41,16 +41,6 @@ class BankBot:
 
         return wrapper
 
-    async def require_exchange(self, response, update) -> bool:
-        if response.status_code == 401:
-            return True
-        elif response.status_code in [400, 403, 404, 405, 408, 429, 500, 502, 503, 504]:
-            logger.error(
-                f"User {update.message.from_user.id} tried to make a request but request was unsuccessful.\nRequest failed with code {response.status_code} and message {response.text}"
-            )
-        else:
-            return False
-
     async def refresh_token(self) -> None:
         logger.warning("Tokens are expired, getting new tokens...")
         self.init_token = self.client.generate_token()
@@ -177,17 +167,27 @@ class BankBot:
 
         url = f"https://bankaccountdata.gocardless.com/api/v2/accounts/{db.get_account_id(update.message.from_user.id)}/balances/"
 
-        response = requests.get(
-            url,
-            headers={
-                "accept": "application/json",
-                "Authorization": f"Bearer {self.init_token['access']}",
-            },
-        )
-
-        if await self.require_exchange(response, update):
+        try:
+            response = requests.get(
+                url,
+                headers={
+                    "accept": "application/json",
+                    "Authorization": f"Bearer {self.init_token['access']}",
+                },
+            )
+        except requests.HTTPError:
+            logger.error(
+                f"User {update.message.from_user.id} tried to make a request but request was unsuccessful.\nRequest failed with code {response.status_code} and message {response.text}"
+            )
             await self.refresh_token()
-
+            response = requests.get(
+                url,
+                headers={
+                    "accept": "application/json",
+                    "Authorization": f"Bearer {self.init_token['access']}",
+                },
+            )
+            
         balance = next(
             (
                 balance["balanceAmount"]["amount"]
@@ -218,8 +218,26 @@ class BankBot:
             },
         )
 
-        if await self.require_exchange(response, update):
+        try:
+            response = requests.get(
+                url,
+                headers={
+                    "accept": "application/json",
+                    "Authorization": f"Bearer {self.init_token['access']}",
+                },
+            )
+        except requests.HTTPError:
+            logger.error(
+                f"User {update.message.from_user.id} tried to make a request but request was unsuccessful.\nRequest failed with code {response.status_code} and message {response.text}"
+            )
             await self.refresh_token()
+            response = requests.get(
+                url,
+                headers={
+                    "accept": "application/json",
+                    "Authorization": f"Bearer {self.init_token['access']}",
+                },
+            )
 
         messages_list = []
         for transaction_type in ["pending", "booked"]:
