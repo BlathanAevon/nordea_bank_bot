@@ -167,15 +167,15 @@ class BankBot:
 
         url = f"https://bankaccountdata.gocardless.com/api/v2/accounts/{db.get_account_id(update.message.from_user.id)}/balances/"
 
-        try:
-            response = requests.get(
+        
+        response = requests.get(
                 url,
                 headers={
                     "accept": "application/json",
                     "Authorization": f"Bearer {self.init_token['access']}",
                 },
             )
-        except requests.HTTPError:
+        if response.status_code == 401:
             logger.error(
                 f"User {update.message.from_user.id} tried to make a request but request was unsuccessful.\nRequest failed with code {response.status_code} and message {response.text}"
             )
@@ -218,15 +218,14 @@ class BankBot:
             },
         )
 
-        try:
-            response = requests.get(
+        response = requests.get(
                 url,
                 headers={
                     "accept": "application/json",
                     "Authorization": f"Bearer {self.init_token['access']}",
                 },
             )
-        except requests.HTTPError:
+        if response.status_code == 401:
             logger.error(
                 f"User {update.message.from_user.id} tried to make a request but request was unsuccessful.\nRequest failed with code {response.status_code} and message {response.text}"
             )
