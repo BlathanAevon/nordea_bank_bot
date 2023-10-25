@@ -5,6 +5,8 @@ from telegram.ext import (
     filters,
     CallbackContext,
     ApplicationBuilder,
+    CallbackQueryHandler,
+    ConversationHandler,
 )
 from nordigen import NordigenClient
 from dotenv import load_dotenv
@@ -21,6 +23,8 @@ load_dotenv()
 
 
 class BankBot:
+    AWAITING_MESSAGE = 0
+
     def __init__(self, bot_token):
         self.bot_token = bot_token
         self.application = None
@@ -44,7 +48,6 @@ class BankBot:
     async def refresh_token(self) -> None:
         logger.warning("Tokens are expired, getting new tokens...")
         self.init_token = self.client.generate_token()
-        
 
     @log_info
     async def on_start(self, update: Update, callback: CallbackContext) -> None:
@@ -54,6 +57,15 @@ class BankBot:
             if db.is_authorized(user_id):
                 try:
                     await self.authenticated(update, callback)
+                    if db.get_tx_notify(user_id)[0]:
+                        self.remove_job_if_exists(f"tx_checker_{user_id}", callback)
+                        callback.job_queue.run_repeating(
+                            self.new_tx_trigger,
+                            10,
+                            chat_id=user_id,
+                            name=f"tx_checker_{user_id}",
+                            data=callback,
+                        )
                     return
                 except requests.HTTPError:
                     await self.refresh_token()
@@ -77,6 +89,7 @@ class BankBot:
 
         else:
             db.insert_user(user_id)
+
             await update.message.reply_text(
                 f"👨 Hello {update.message.from_user.first_name}! Welcome to Nordea Bank Checker, please authenticate in your bank."
             )
@@ -109,7 +122,7 @@ class BankBot:
             [
                 KeyboardButton(
                     "👨‍💻 Authenticate Bank",
-                    web_app=WebAppInfo(db.get_auth_link(user_id)),
+                    web_app=WebAppInfo(auth_link),
                 )
             ]
         ]
@@ -154,7 +167,15 @@ class BankBot:
             ]
         ]
 
-        main_keyboard.extend([[KeyboardButton("⚙️ Settings")]])
+        if str(user_id) == os.getenv("ADMIN_ID"):
+            main_keyboard.append(
+                [
+                    KeyboardButton("🔊 Notify Everyone"),
+                    KeyboardButton("⚙️ Settings"),
+                ]
+            )
+        else:
+            main_keyboard.extend([[KeyboardButton("⚙️ Settings")]])
 
         await update.message.reply_text(
             "🏫 Choose an option:",
@@ -167,14 +188,13 @@ class BankBot:
 
         url = f"https://bankaccountdata.gocardless.com/api/v2/accounts/{db.get_account_id(update.message.from_user.id)}/balances/"
 
-        
         response = requests.get(
-                url,
-                headers={
-                    "accept": "application/json",
-                    "Authorization": f"Bearer {self.init_token['access']}",
-                },
-            )
+            url,
+            headers={
+                "accept": "application/json",
+                "Authorization": f"Bearer {self.init_token['access']}",
+            },
+        )
         if response.status_code == 401:
             logger.error(
                 f"User {update.message.from_user.id} tried to make a request but request was unsuccessful.\nRequest failed with code {response.status_code} and message {response.text}"
@@ -187,7 +207,7 @@ class BankBot:
                     "Authorization": f"Bearer {self.init_token['access']}",
                 },
             )
-            
+
         balance = next(
             (
                 balance["balanceAmount"]["amount"]
@@ -201,14 +221,8 @@ class BankBot:
             f"💸 Account Balance is {balance} SEK",
         )
 
-    @log_info
-    async def get_transactions(self, update: Update, context: CallbackContext) -> None:
-        logger.info(
-            f"User {update.message.from_user.id} pressed Get Transactions at {datetime.now().strftime('%d.%m.%Y %H:%M')}"
-        )
-        await update.message.reply_text("♻️ Getting transactions...")
-
-        url = f"https://bankaccountdata.gocardless.com/api/v2/accounts/{db.get_account_id(update.message.from_user.id)}/transactions/"
+    async def get_transactions_logic(self, user_id) -> str:
+        url = f"https://bankaccountdata.gocardless.com/api/v2/accounts/{db.get_account_id(user_id)}/transactions/"
 
         response = requests.get(
             url,
@@ -218,16 +232,9 @@ class BankBot:
             },
         )
 
-        response = requests.get(
-                url,
-                headers={
-                    "accept": "application/json",
-                    "Authorization": f"Bearer {self.init_token['access']}",
-                },
-            )
         if response.status_code == 401:
             logger.error(
-                f"User {update.message.from_user.id} tried to make a request but request was unsuccessful.\nRequest failed with code {response.status_code} and message {response.text}"
+                f"User {user_id} tried to make a request but request was unsuccessful.\nRequest failed with code {response.status_code} and message {response.text}"
             )
             await self.refresh_token()
             response = requests.get(
@@ -238,6 +245,9 @@ class BankBot:
                 },
             )
 
+        return response
+
+    def format_transactons(self, response: str) -> list:
         messages_list = []
         for transaction_type in ["pending", "booked"]:
             for transaction in response.json()["transactions"].get(
@@ -288,14 +298,189 @@ class BankBot:
 
                 messages_list.append(data_message)
 
+        return messages_list
+
+    @log_info
+    async def get_transactions(self, update: Update, context: CallbackContext) -> None:
+        logger.info(
+            f"User {update.message.from_user.id} pressed Get Transactions at {datetime.now().strftime('%d.%m.%Y %H:%M')}"
+        )
+        await update.message.reply_text("♻️ Getting transactions...")
+
+        response = await self.get_transactions_logic(update.message.from_user.id)
+
+        messages_list = self.format_transactons(response)
+
         messages_list.reverse()
+
+        last_tx = messages_list[-1:][0]
+        db.set_last_tx(update.message.from_user.id, last_tx)
 
         for final_message in messages_list:
             await update.message.reply_text(final_message, parse_mode="MarkdownV2")
 
+    async def notification_keyboard(
+        self, update: Update, context: CallbackContext
+    ) -> None:
+        if db.get_tx_notify(update.message.from_user.id)[0]:
+            settings_keyboard = [
+                [
+                    KeyboardButton(
+                        "⬅️ Back",
+                    ),
+                    KeyboardButton(
+                        "❌ Disable Notificatons",
+                    ),
+                ]
+            ]
+
+            await update.message.reply_text(
+                "🏫 Choose an option:",
+                reply_markup=ReplyKeyboardMarkup(
+                    settings_keyboard, resize_keyboard=True
+                ),
+            )
+        else:
+            settings_keyboard = [
+                [
+                    KeyboardButton(
+                        "⬅️ Back",
+                    ),
+                    KeyboardButton(
+                        "✅ Enable Notifications",
+                    ),
+                ]
+            ]
+
+            await update.message.reply_text(
+                "🏫 Choose an option:",
+                reply_markup=ReplyKeyboardMarkup(
+                    settings_keyboard, resize_keyboard=True
+                ),
+            )
+
     @log_info
     async def settings(self, update: Update, context: CallbackContext) -> None:
-        pass
+        await self.notification_keyboard(update, context)
+
+    @log_info
+    async def back_button_handler(self, update: Update, context: CallbackContext):
+        main_keyboard = [
+            [
+                KeyboardButton(
+                    "📇 Get Transactions",
+                ),
+                KeyboardButton(
+                    "💳 Get Balance",
+                ),
+            ]
+        ]
+
+        if str(update.message.from_user.id) == os.getenv("ADMIN_ID"):
+            main_keyboard.append(
+                [
+                    KeyboardButton("🔊 Notify Everyone"),
+                    KeyboardButton("⚙️ Settings"),
+                ]
+            )
+        else:
+            main_keyboard.extend([[KeyboardButton("⚙️ Settings")]])
+
+        await update.message.reply_text(
+            "🏫 Choose an option:",
+            reply_markup=ReplyKeyboardMarkup(main_keyboard, resize_keyboard=True),
+        )
+
+    @log_info
+    async def notify_everyone(self, update: Update, context: CallbackContext):
+        await update.message.reply_text("🗣 Enter notification:")
+        return self.AWAITING_MESSAGE
+
+    @log_info
+    async def handle_notification(
+        self, update: Update, context: CallbackContext
+    ) -> int:
+        for telegram_id in db.get_telegram_ids():
+            if db.is_authorized(telegram_id):
+                await context.bot.send_message(
+                    chat_id=telegram_id,
+                    text=f"⚠️ NOTIFICATION FOR ALL USERS!⚠️\n\n{update.message.text}",
+                )
+
+        await update.message.reply_text("🟢 Notifications successfully sent!")
+
+        return ConversationHandler.END
+
+    async def new_tx_trigger(self, context: CallbackContext) -> None:
+        job = context.job
+
+        response = await self.get_transactions_logic(job.chat_id)
+        messages_list = self.format_transactons(response)
+        messages_list.reverse()
+
+        last_tx = db.get_last_tx(job.chat_id)
+        current_last_tx = messages_list[-1:]
+
+        if last_tx[0] != current_last_tx[0]:
+            db.set_last_tx(job.chat_id, current_last_tx[0])
+            await context.bot.send_message(
+                chat_id=job.chat_id,
+                text=f"💸 NEW TRANSACTION 💸\n\n{current_last_tx[0]}",
+                parse_mode="MarkdownV2",
+            )
+
+    def remove_job_if_exists(self, name: str, context: CallbackContext) -> bool:
+        """Remove job with given name. Returns whether job was removed."""
+        current_jobs = context.job_queue.get_jobs_by_name(name)
+        if not current_jobs:
+            return False
+        for job in current_jobs:
+            job.schedule_removal()
+        return True
+
+    async def enable_notificatons(
+        self, update: Update, context: CallbackContext
+    ) -> None:
+        user_id = update.message.from_user.id
+
+        db.set_tx_notify(user_id, True)
+
+        context.job_queue.run_repeating(
+            self.new_tx_trigger,
+            10,
+            chat_id=user_id,
+            name=f"tx_checker_{user_id}",
+            data=context,
+        )
+
+        response = await self.get_transactions_logic(user_id)
+        messages_list = self.format_transactons(response)
+        messages_list.reverse()
+
+        last_tx = db.get_last_tx(user_id)
+        current_last_tx = messages_list[-1:]
+
+        if last_tx[0] != current_last_tx[0]:
+            db.set_last_tx(user_id, current_last_tx[0])
+
+        await update.message.reply_text("🔈 Transactions notifications enabled.")
+        await self.notification_keyboard(update, context)
+
+    async def disable_notifications(
+        self, update: Update, context: CallbackContext
+    ) -> None:
+        user_id = update.message.from_user.id
+
+        job_removed = self.remove_job_if_exists(f"tx_checker_{user_id}", context)
+
+        if job_removed:
+            db.set_tx_notify(update.message.from_user.id, False)
+            await update.message.reply_text("🔇 Transactions notifications disabled.")
+            await self.notification_keyboard(update, context)
+        else:
+            await update.message.reply_text(
+                "📟 Transactions notifications are not changed."
+            )
 
     def run_bot(self) -> None:
         db.db_init()
@@ -332,11 +517,44 @@ class BankBot:
             MessageHandler(filters.Text("📇 Get Transactions"), self.get_transactions)
         )
         self.application.add_handler(
+            MessageHandler(filters.Text("⬅️ Back"), self.back_button_handler)
+        )
+
+        self.application.add_handler(
             MessageHandler(filters.Text("⚙️ Settings"), self.settings)
+        )
+        self.application.add_handler(
+            MessageHandler(
+                filters.Text("❌ Disable Notificatons"), self.disable_notifications
+            )
+        )
+        self.application.add_handler(
+            MessageHandler(
+                filters.Text("✅ Enable Notifications"), self.enable_notificatons
+            )
         )
 
         self.application.add_handler(
             MessageHandler(filters.StatusUpdate.WEB_APP_DATA, self.authenticated)
+        )
+
+        conv_handler = ConversationHandler(
+            entry_points=[
+                MessageHandler(filters.Text("🔊 Notify Everyone"), self.notify_everyone)
+            ],
+            states={
+                self.AWAITING_MESSAGE: [
+                    MessageHandler(filters.Text(), self.handle_notification)
+                ],
+            },
+            fallbacks=[],
+        )
+
+        self.application.add_handler(conv_handler)
+        self.application.add_handler(
+            CallbackQueryHandler(
+                self.handle_notification, pattern="🗣 Enter notification:"
+            )
         )
 
         logger.success(
