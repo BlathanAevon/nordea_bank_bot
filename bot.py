@@ -12,6 +12,7 @@ from nordigen import NordigenClient
 from dotenv import load_dotenv
 from datetime import datetime
 from functools import wraps
+from random import randint
 from loguru import logger
 from uuid import uuid4
 import database as db
@@ -61,7 +62,7 @@ class BankBot:
                         self.remove_job_if_exists(f"tx_checker_{user_id}", callback)
                         callback.job_queue.run_repeating(
                             self.new_tx_trigger,
-                            10,
+                            randint(60, 120),
                             chat_id=user_id,
                             name=f"tx_checker_{user_id}",
                             data=callback,
@@ -248,7 +249,9 @@ class BankBot:
         return response
 
     def format_transactons(self, response: str) -> list:
-        messages_list = []
+        booked_list = []
+        pending_list = []
+
         for transaction_type in ["pending", "booked"]:
             for transaction in response.json()["transactions"].get(
                 transaction_type, []
@@ -296,7 +299,12 @@ class BankBot:
                     ]
                 )
 
-                messages_list.append(data_message)
+                if transaction_type == "booked":
+                    booked_list.append(data_message)
+                else:
+                    pending_list.append(data_message)
+
+        messages_list = booked_list + pending_list
 
         return messages_list
 
@@ -313,7 +321,7 @@ class BankBot:
 
         messages_list.reverse()
 
-        last_tx = messages_list[-1:][0]
+        last_tx = messages_list[-1]
         db.set_last_tx(update.message.from_user.id, last_tx)
 
         for final_message in messages_list:
@@ -413,21 +421,41 @@ class BankBot:
 
     async def new_tx_trigger(self, context: CallbackContext) -> None:
         job = context.job
+        chat_id = job.chat_id
 
-        response = await self.get_transactions_logic(job.chat_id)
-        messages_list = self.format_transactons(response)
-        messages_list.reverse()
+        logger.info(f"DOING JOB FOR {chat_id}")
 
-        last_tx = db.get_last_tx(job.chat_id)
-        current_last_tx = messages_list[-1:]
+        response = await self.get_transactions_logic(chat_id)
+        current_last_tx = self.format_transactons(response)
+        current_last_tx.reverse()
+        current_last_tx = current_last_tx[-1]
 
-        if last_tx[0] != current_last_tx[0]:
-            db.set_last_tx(job.chat_id, current_last_tx[0])
+        last_tx = db.get_last_tx(chat_id)
+
+        max_retries = 3
+
+        if last_tx[0] != current_last_tx:
+            db.set_last_tx(chat_id, current_last_tx)
             await context.bot.send_message(
-                chat_id=job.chat_id,
-                text=f"💸 NEW TRANSACTION 💸\n\n{current_last_tx[0]}",
+                chat_id=chat_id,
+                text=f"💸 NEW TRANSACTION 💸\n\n{current_last_tx}",
                 parse_mode="MarkdownV2",
             )
+        else:
+            for _ in range(max_retries):
+                response = await self.get_transactions_logic(chat_id)
+                current_last_tx = self.format_transactons(response)
+                current_last_tx.reverse()
+                current_last_tx = current_last_tx[-1]
+
+                if last_tx[0] != current_last_tx:
+                    db.set_last_tx(chat_id, current_last_tx)
+                    await context.bot.send_message(
+                        chat_id=chat_id,
+                        text=f"💸 NEW TRANSACTION 💸\n\n{current_last_tx}",
+                        parse_mode="MarkdownV2",
+                    )
+                    break
 
     def remove_job_if_exists(self, name: str, context: CallbackContext) -> bool:
         """Remove job with given name. Returns whether job was removed."""
@@ -447,7 +475,7 @@ class BankBot:
 
         context.job_queue.run_repeating(
             self.new_tx_trigger,
-            10,
+            randint(60, 120),
             chat_id=user_id,
             name=f"tx_checker_{user_id}",
             data=context,
