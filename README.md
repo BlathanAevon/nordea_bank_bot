@@ -67,6 +67,7 @@ SECRET_ID = gocardless secret id
 SECRET_KEY = gocardless secret key
 BOT_TOKEN = token of your telegram bot
 WEB_APP_URL = redirect url after successfull login to the bank account
+ADMIN_ID = id of admin to make noitifications
 
 ```
 
