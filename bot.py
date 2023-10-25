@@ -432,8 +432,6 @@ class BankBot:
 
         last_tx = db.get_last_tx(chat_id)
 
-        max_retries = 3
-
         if last_tx[0] != current_last_tx:
             db.set_last_tx(chat_id, current_last_tx)
             await context.bot.send_message(
@@ -441,21 +439,6 @@ class BankBot:
                 text=f"💸 NEW TRANSACTION 💸\n\n{current_last_tx}",
                 parse_mode="MarkdownV2",
             )
-        else:
-            for _ in range(max_retries):
-                response = await self.get_transactions_logic(chat_id)
-                current_last_tx = self.format_transactons(response)
-                current_last_tx.reverse()
-                current_last_tx = current_last_tx[-1]
-
-                if last_tx[0] != current_last_tx:
-                    db.set_last_tx(chat_id, current_last_tx)
-                    await context.bot.send_message(
-                        chat_id=chat_id,
-                        text=f"💸 NEW TRANSACTION 💸\n\n{current_last_tx}",
-                        parse_mode="MarkdownV2",
-                    )
-                    break
 
     def remove_job_if_exists(self, name: str, context: CallbackContext) -> bool:
         """Remove job with given name. Returns whether job was removed."""
