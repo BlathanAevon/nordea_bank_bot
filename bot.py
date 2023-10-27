@@ -250,63 +250,55 @@ class BankBot:
 
     def format_transactons(self, response: str) -> list:
         booked_list = []
-        pending_list = []
+        for transaction in response.json()["transactions"]["booked"][:10]:
+            transaction_summ = float(transaction["transactionAmount"]["amount"])
+            transaction_amount = f"{transaction_summ} SEK"
+            transaction_type = transaction["remittanceInformationUnstructured"].strip(
+                "*"
+            )
 
-        for transaction_type in ["pending", "booked"]:
-            for transaction in response.json()["transactions"].get(
-                transaction_type, []
-            )[:11]:
-                transaction_summ = float(transaction["transactionAmount"]["amount"])
-                transaction_amount = f"{transaction_summ} SEK"
-                transaction_type = transaction[
-                    "remittanceInformationUnstructured"
-                ].strip("*")
+            if transaction_summ < 0:
+                inverted_summ = transaction_summ * -1
+                transaction_amount = f"**{inverted_summ}** SEK"
 
+            if "Överföring" in transaction_type:
                 if transaction_summ < 0:
-                    inverted_summ = transaction_summ * -1
-                    transaction_amount = f"**{inverted_summ}** SEK"
-
-                if "Överföring" in transaction_type:
-                    if transaction_summ < 0:
-                        transaction_type = (
-                            f"🔄 #Transfer  to {transaction_type.strip('Överföring')}"
-                        )
-                    else:
-                        transaction_type = (
-                            f"🔄 #Transfer  from {transaction_type.strip('Överföring')}"
-                        )
-                elif "Kortköp" in transaction_type:
-                    transaction_type = f"💳 #CardPayment  to {transaction_type.strip('Kortköp')[7:]}".replace(
-                        "*", ""
-                    )
-                elif "Lön" in transaction_type:
-                    transaction_type = "💰 #MonthlySalary"
-                elif "" in transaction_type:
                     transaction_type = (
-                        f"🏦 #ServicePayment  to {transaction_type.strip('Betalning')}"
+                        f"🔄 #Transfer  to {transaction_type.strip('Överföring')}"
                     )
-
-                transaction_date = datetime.strptime(
-                    transaction["transactionId"], "%Y-%m-%d-%H.%M.%S.%f"
-                ).strftime("%d.%m.%Y ⌛ %H:%M")
-                data_message = f"{transaction_type}\n\n💵 Amount: {transaction_amount}\n\n🗓️ Date: {transaction_date}"
-
-                characters_to_escape = [".", "-", "(", ")", "#"]
-                data_message = "".join(
-                    [
-                        "\\" + char if char in characters_to_escape else char
-                        for char in data_message
-                    ]
+                else:
+                    transaction_type = (
+                        f"🔄 #Transfer  from {transaction_type.strip('Överföring')}"
+                    )
+            elif "Kortköp" in transaction_type:
+                transaction_type = f"💳 #CardPayment  to {transaction_type.strip('Kortköp')[7:]}".replace(
+                    "*", ""
+                )
+            elif "Lön" in transaction_type:
+                transaction_type = "💰 #MonthlySalary"
+            elif "" in transaction_type:
+                transaction_type = (
+                    f"🏦 #ServicePayment  to {transaction_type.strip('Betalning')}"
                 )
 
-                if transaction_type == "booked":
-                    booked_list.append(data_message)
-                else:
-                    pending_list.append(data_message)
+            transaction_date = datetime.strptime(
+                transaction["transactionId"], "%Y-%m-%d-%H.%M.%S.%f"
+            ).strftime("%d.%m.%Y ⌛ %H:%M")
+            data_message = f"{transaction_type}\n\n💵 Amount: {transaction_amount}\n\n🗓️ Date: {transaction_date}"
 
-        messages_list = booked_list + pending_list
+            characters_to_escape = [".", "-", "(", ")", "#"]
+            data_message = "".join(
+                [
+                    "\\" + char if char in characters_to_escape else char
+                    for char in data_message
+                ]
+            )
 
-        return messages_list
+            booked_list.append(data_message)
+
+        booked_list.reverse()
+
+        return booked_list
 
     @log_info
     async def get_transactions(self, update: Update, context: CallbackContext) -> None:
@@ -318,8 +310,6 @@ class BankBot:
         response = await self.get_transactions_logic(update.message.from_user.id)
 
         messages_list = self.format_transactons(response)
-
-        messages_list.reverse()
 
         last_tx = messages_list[-1]
         db.set_last_tx(update.message.from_user.id, last_tx)
@@ -425,9 +415,10 @@ class BankBot:
 
         logger.info(f"DOING JOB FOR {chat_id}")
 
-        response = await self.get_transactions_logic(chat_id)
-        current_last_tx = self.format_transactons(response)
-        current_last_tx.reverse()
+        current_last_tx = self.format_transactons(
+            await self.get_transactions_logic(chat_id)
+        )
+        
         current_last_tx = current_last_tx[-1]
 
         last_tx = db.get_last_tx(chat_id)
@@ -436,7 +427,7 @@ class BankBot:
             db.set_last_tx(chat_id, current_last_tx)
             await context.bot.send_message(
                 chat_id=chat_id,
-                text=f"💸 NEW TRANSACTION 💸\n\n{current_last_tx}",
+                text=f"💸 NEW TRANSACTION CONFIRMED 💸\n\n{current_last_tx}",
                 parse_mode="MarkdownV2",
             )
 
@@ -466,7 +457,6 @@ class BankBot:
 
         response = await self.get_transactions_logic(user_id)
         messages_list = self.format_transactons(response)
-        messages_list.reverse()
 
         last_tx = db.get_last_tx(user_id)
         current_last_tx = messages_list[-1:]
