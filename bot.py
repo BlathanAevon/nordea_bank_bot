@@ -472,7 +472,7 @@ class BankBot:
         messages_list = self.format_transactons(response)
 
         last_tx = db.get_last_tx(user_id)
-        current_last_tx = messages_list[-1:]
+        current_last_tx = messages_list[-1]
 
         if last_tx[0] != current_last_tx[0]:
             db.set_last_tx(user_id, current_last_tx[0])
