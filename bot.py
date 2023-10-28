@@ -249,11 +249,10 @@ class BankBot:
         return response
 
     def format_transactons(self, response: str) -> list:
-        booked_list = []
-        for transaction in response.json()["transactions"]["booked"][:10]:
-            transaction_summ = float(transaction["transactionAmount"]["amount"])
+        def format_message(tx_dict: dict) -> None:
+            transaction_summ = float(tx_dict["transactionAmount"]["amount"])
             transaction_amount = f"{transaction_summ} SEK"
-            transaction_type = transaction["remittanceInformationUnstructured"].strip(
+            transaction_type = tx_dict["remittanceInformationUnstructured"].strip(
                 "*"
             )
 
@@ -282,7 +281,7 @@ class BankBot:
                 )
 
             transaction_date = datetime.strptime(
-                transaction["transactionId"], "%Y-%m-%d-%H.%M.%S.%f"
+                tx_dict["transactionId"], "%Y-%m-%d-%H.%M.%S.%f"
             ).strftime("%d.%m.%Y ⌛ %H:%M")
             data_message = f"{transaction_type}\n\n💵 Amount: {transaction_amount}\n\n🗓️ Date: {transaction_date}"
 
@@ -294,11 +293,25 @@ class BankBot:
                 ]
             )
 
-            booked_list.append(data_message)
+            return data_message
+
+    
+        booked_list = []
+        pending_list = []
+
+        for transaction in response.json()["transactions"]["booked"][:10]:
+            booked_list.append(format_message(transaction))
+
+        for transaction in response.json()["transactions"]["pending"]:
+            pending_list.append(format_message(transaction))
 
         booked_list.reverse()
+        pending_list.reverse()
 
-        return booked_list
+        final_list = booked_list + pending_list
+        final_list = final_list[-10:]
+
+        return final_list
 
     @log_info
     async def get_transactions(self, update: Update, context: CallbackContext) -> None:
