@@ -252,9 +252,7 @@ class BankBot:
         def format_message(tx_dict: dict) -> None:
             transaction_summ = float(tx_dict["transactionAmount"]["amount"])
             transaction_amount = f"{transaction_summ} SEK"
-            transaction_type = tx_dict["remittanceInformationUnstructured"].strip(
-                "*"
-            )
+            transaction_type = tx_dict["remittanceInformationUnstructured"].strip("*")
 
             if transaction_summ < 0:
                 inverted_summ = transaction_summ * -1
@@ -293,23 +291,28 @@ class BankBot:
                 ]
             )
 
-            return data_message
+            return data_message, datetime.strptime(
+                tx_dict["transactionId"], "%Y-%m-%d-%H.%M.%S.%f"
+            )
 
-    
-        booked_list = []
-        pending_list = []
+        booked_dict = {}
+        pending_dict = {}
 
         for transaction in response.json()["transactions"]["booked"][:10]:
-            booked_list.append(format_message(transaction))
+            message, date = format_message(transaction)
+            booked_dict[date] = message
 
         for transaction in response.json()["transactions"]["pending"]:
-            pending_list.append(format_message(transaction))
+            message, date = format_message(transaction)
+            pending_dict[date] = message
 
-        booked_list.reverse()
-        pending_list.reverse()
+        transactions_dict = booked_dict | pending_dict
+        sorted_tx_dict = dict(
+            sorted(transactions_dict.items(), key=lambda item: item[0])
+        )
+        transactions_list = [tx for tx in sorted_tx_dict.values()]
 
-        final_list = booked_list + pending_list
-        final_list = final_list[-10:]
+        final_list = transactions_list[-10:]
 
         return final_list
 
@@ -431,7 +434,7 @@ class BankBot:
         current_last_tx = self.format_transactons(
             await self.get_transactions_logic(chat_id)
         )
-        
+
         current_last_tx = current_last_tx[-1]
 
         last_tx = db.get_last_tx(chat_id)
@@ -472,7 +475,7 @@ class BankBot:
         messages_list = self.format_transactons(response)
 
         last_tx = db.get_last_tx(user_id)
-        current_last_tx = messages_list[-1]
+        current_last_tx = messages_list[-1:]
 
         if last_tx[0] != current_last_tx[0]:
             db.set_last_tx(user_id, current_last_tx[0])
