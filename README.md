@@ -17,6 +17,9 @@ Clone the repository containing the Python script to your local machine:
 
 ```bash
 git clone https://github.com/BlathanAevon/nordea_bank_bot
+```
+
+```bash
 cd nordea_bank_bot
 ```
 
