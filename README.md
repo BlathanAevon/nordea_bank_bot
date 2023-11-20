@@ -16,8 +16,8 @@ Before you begin, make sure you have the following prerequisites installed on yo
 Clone the repository containing the Python script to your local machine:
 
 ```bash
-git clone <repository_url>
-cd <repository_directory>
+git clone https://github.com/BlathanAevon/nordea_bank_bot
+cd nordea_bank_bot
 ```
 
 ## Step 2: Create a Virtual Environment
